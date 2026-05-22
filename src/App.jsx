@@ -7,6 +7,7 @@ import { colors } from './utils/theme';
 import CustomerApp from './components/CustomerApp';
 import ManagerApp from './components/ManagerApp';
 import DisplayApp from './components/DisplayApp';
+import ManufactureApp from './components/manufactureapp.jsx';
 
 const DEFAULT_MENU_LIST = []; 
 
@@ -28,16 +29,28 @@ export default function App() {
     return () => unsub();
   }, []);
 
-  if (loading) return (
-    <div style={{ backgroundColor: colors.bg, color: '#FFFFFF', height: '100vh', display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
-      로딩중...
-    </div>
-  );
+  if (loading) {
+    return (
+      <div
+        style={{
+          backgroundColor: colors.bg,
+          color: '#FFFFFF',
+          height: '100vh',
+          display: 'flex',
+          justifyContent: 'center',
+          alignItems: 'center',
+        }}
+      >
+        로딩중...
+      </div>
+    );
+  }
 
   const path = window.location.pathname.toLowerCase();
   
   if (path === '/manager') return <ManagerApp menus={menus} />;
   if (path === '/display') return <DisplayApp />;
+  if (path === '/manufacture') return <ManufactureApp />;
   
   return <CustomerApp menus={menus} />;
 }
