@@ -12,12 +12,11 @@ const colors = {
   accent: '#FACC15',
   background: '#000000',
   card: '#1F2937',
-  cardHover: '#263449',
+  cardStopped: '#111827',
   muted: '#9CA3AF',
   error: '#F87171',
   white: '#FFFFFF',
   danger: '#EF4444',
-  dangerDark: '#991B1B',
   border: '#374151',
 };
 
@@ -41,6 +40,10 @@ function isReadyOrder(order) {
   }
 
   return READY_STATUSES.map((item) => normalizeText(item)).includes(status);
+}
+
+function getOrderId(order) {
+  return order?.firestoreId || order?.id || '';
 }
 
 function getPhoneLastDigits(order) {
@@ -124,12 +127,12 @@ function getOrderTimeValue(order) {
 
 export default function DisplayApp() {
   const [completedOrders, setCompletedOrders] = useState([]);
+  const [stoppedBlinkIds, setStoppedBlinkIds] = useState([]);
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState('');
   const [processing, setProcessing] = useState(false);
 
   useEffect(() => {
-    // createdAt이 없는 주문도 누락되지 않도록 orderBy를 쓰지 않습니다.
     const ordersQuery = query(collection(db, 'orders'));
 
     const unsubscribe = onSnapshot(
@@ -173,7 +176,7 @@ export default function DisplayApp() {
 
     try {
       const now = Date.now();
-      const orderId = order?.firestoreId || order?.id;
+      const orderId = getOrderId(order);
 
       if (!orderId) {
         alert('주문 ID를 찾을 수 없습니다.');
@@ -185,10 +188,30 @@ export default function DisplayApp() {
         pickedUpAt: now,
         updatedAt: now,
       });
+
+      setStoppedBlinkIds((prev) => prev.filter((id) => id !== orderId));
     } catch (error) {
       console.error('픽업화면 개별 삭제 실패:', error);
       alert('픽업화면에서 삭제하지 못했습니다.');
     }
+  };
+
+  const handleOrderClick = async (order) => {
+    const orderId = getOrderId(order);
+
+    if (!orderId) {
+      alert('주문 ID를 찾을 수 없습니다.');
+      return;
+    }
+
+    const alreadyStopped = stoppedBlinkIds.includes(orderId);
+
+    if (!alreadyStopped) {
+      setStoppedBlinkIds((prev) => [...prev, orderId]);
+      return;
+    }
+
+    await handleHideOrder(order);
   };
 
   const handleHideAllOrders = async () => {
@@ -211,7 +234,7 @@ export default function DisplayApp() {
 
       await Promise.all(
         completedOrders.map((order) => {
-          const orderId = order?.firestoreId || order?.id;
+          const orderId = getOrderId(order);
 
           if (!orderId) {
             return Promise.resolve();
@@ -224,6 +247,8 @@ export default function DisplayApp() {
           });
         })
       );
+
+      setStoppedBlinkIds([]);
     } catch (error) {
       console.error('픽업화면 전체 삭제 실패:', error);
       alert('전체 삭제 처리에 실패했습니다.');
@@ -245,6 +270,49 @@ export default function DisplayApp() {
         flexDirection: 'column',
       }}
     >
+      <style>
+        {`
+          @keyframes pickupBorderBlink {
+            0% {
+              border-color: #FACC15;
+              box-shadow: 0 0 8px rgba(250, 204, 21, 0.45);
+            }
+
+            50% {
+              border-color: #FFFFFF;
+              box-shadow: 0 0 28px rgba(250, 204, 21, 1);
+            }
+
+            100% {
+              border-color: #FACC15;
+              box-shadow: 0 0 8px rgba(250, 204, 21, 0.45);
+            }
+          }
+
+          @keyframes pickupNumberPulse {
+            0% {
+              transform: scale(1);
+            }
+
+            50% {
+              transform: scale(1.04);
+            }
+
+            100% {
+              transform: scale(1);
+            }
+          }
+
+          .pickup-card-blinking {
+            animation: pickupBorderBlink 1s infinite, pickupNumberPulse 1s infinite;
+          }
+
+          .pickup-card-stopped {
+            animation: none;
+          }
+        `}
+      </style>
+
       <div
         style={{
           position: 'relative',
@@ -344,17 +412,28 @@ export default function DisplayApp() {
           }}
         >
           {completedOrders.map((order, index) => {
+            const orderId = getOrderId(order);
             const phoneLastDigits = getPhoneLastDigits(order);
             const displayNumber = phoneLastDigits || `없음${index + 1}`;
+            const isBlinkStopped = stoppedBlinkIds.includes(orderId);
 
             return (
               <button
-                key={order?.firestoreId || order?.id || index}
-                onClick={() => handleHideOrder(order)}
-                title="클릭하면 픽업화면에서 삭제됩니다"
+                key={orderId || index}
+                onClick={() => handleOrderClick(order)}
+                title={
+                  isBlinkStopped
+                    ? '다시 클릭하면 픽업화면에서 삭제됩니다'
+                    : '클릭하면 깜박임이 멈춥니다'
+                }
+                className={
+                  isBlinkStopped
+                    ? 'pickup-card-stopped'
+                    : 'pickup-card-blinking'
+                }
                 style={{
-                  backgroundColor: colors.card,
-                  border: `5px solid ${colors.accent}`,
+                  backgroundColor: isBlinkStopped ? colors.cardStopped : colors.card,
+                  border: `5px solid ${isBlinkStopped ? colors.border : colors.accent}`,
                   borderRadius: '20px',
                   display: 'flex',
                   alignItems: 'center',
@@ -365,7 +444,7 @@ export default function DisplayApp() {
                   fontWeight: '900',
                   boxSizing: 'border-box',
                   minHeight: 0,
-                  color: colors.white,
+                  color: isBlinkStopped ? colors.muted : colors.white,
                   cursor: 'pointer',
                   fontFamily: 'inherit',
                 }}
