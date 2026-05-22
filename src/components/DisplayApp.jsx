@@ -5,7 +5,7 @@ import {
   query,
   orderBy,
 } from 'firebase/firestore';
-import { db } from './firebase';
+import { db } from '../firebase';
 
 const colors = {
   accent: '#FACC15',
@@ -14,6 +14,7 @@ const colors = {
 export default function DisplayApp() {
   const [completedOrders, setCompletedOrders] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [errorMessage, setErrorMessage] = useState('');
 
   useEffect(() => {
     const ordersQuery = query(
@@ -35,9 +36,11 @@ export default function DisplayApp() {
 
         setCompletedOrders(completed);
         setLoading(false);
+        setErrorMessage('');
       },
       (error) => {
         console.error('Display orders load error:', error);
+        setErrorMessage(error.message || '주문을 불러오지 못했습니다.');
         setLoading(false);
       }
     );
@@ -77,6 +80,20 @@ export default function DisplayApp() {
           }}
         >
           로딩중...
+        </div>
+      ) : errorMessage ? (
+        <div
+          style={{
+            textAlign: 'center',
+            fontSize: '28px',
+            color: '#F87171',
+            marginTop: '80px',
+            lineHeight: '1.5',
+          }}
+        >
+          주문을 불러오지 못했습니다.
+          <br />
+          {errorMessage}
         </div>
       ) : completedOrders.length === 0 ? (
         <div
