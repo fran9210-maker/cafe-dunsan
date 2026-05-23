@@ -239,10 +239,6 @@ export default function CustomerApp() {
     addToCart(selectedMenu, hotIceSelection, shotSelection, finalPrice);
   };
 
-  // ==========================================
-  // 포인트 / 결제 금액 계산
-  // ==========================================
-
   const cartSubtotal = cart.reduce(
     (sum, item) => sum + Number(item.finalPrice || 0) * Number(item.quantity || 0),
     0
@@ -297,6 +293,8 @@ export default function CustomerApp() {
     }
 
     const now = new Date();
+    const nowTime = Date.now();
+
     const dateStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
     const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
 
@@ -334,11 +332,21 @@ export default function CustomerApp() {
         usedPoints,
         totalPrice: finalPaymentPrice,
         earnedPoints,
+
         status: 'pending',
         paymentStatus: 'pending',
+
+        qrVerified: false,
+        qrVerifiedAt: null,
+
+        paidAt: null,
+
+        displayHidden: false,
+
         date: dateStr,
         time: timeStr,
-        createdAt: Date.now()
+        createdAt: nowTime,
+        updatedAt: nowTime
       });
 
       const customerRef = doc(db, 'customers', phone);
@@ -423,9 +431,6 @@ export default function CustomerApp() {
     return price;
   };
 
-  // ==========================================
-  // 1. 전화번호 입력 화면
-  // ==========================================
   if (appStep === 'phone') {
     return (
       <div
@@ -510,9 +515,6 @@ export default function CustomerApp() {
     );
   }
 
-  // ==========================================
-  // 2. 주문 완료 화면
-  // ==========================================
   if (appStep === 'complete' && placedOrder) {
     return (
       <div
@@ -547,8 +549,10 @@ export default function CustomerApp() {
             주문이 완료되었습니다!
           </h2>
 
-          <p style={{ color: colors.textDim, marginBottom: '30px' }}>
-            아래 QR 코드를 스캔하여 결제를 진행해주세요.
+          <p style={{ color: colors.textDim, marginBottom: '16px', lineHeight: 1.6 }}>
+            아래 QR 코드를 매니저에게 보여주세요.
+            <br />
+            QR 확인 후 주문서가 접수됩니다.
           </p>
 
           <div
@@ -557,14 +561,25 @@ export default function CustomerApp() {
               padding: '15px',
               borderRadius: '12px',
               display: 'inline-block',
-              marginBottom: '30px'
+              marginBottom: '20px'
             }}
           >
             <img
-              src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${placedOrder.id}`}
-              alt="결제 QR 코드"
+              src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(placedOrder.id)}`}
+              alt="주문 확인 QR 코드"
               style={{ display: 'block' }}
             />
+          </div>
+
+          <div
+            style={{
+              color: colors.textDim,
+              fontSize: '13px',
+              marginBottom: '25px',
+              wordBreak: 'break-all'
+            }}
+          >
+            주문 ID: {placedOrder.id}
           </div>
 
           <div
@@ -675,9 +690,6 @@ export default function CustomerApp() {
     );
   }
 
-  // ==========================================
-  // 3. 메뉴 선택 화면
-  // ==========================================
   return (
     <div
       style={{
@@ -691,7 +703,6 @@ export default function CustomerApp() {
         overflow: 'hidden'
       }}
     >
-      {/* 위쪽 메뉴판 영역: 별도 스크롤 */}
       <div
         style={{
           flex: 1,
@@ -785,7 +796,6 @@ export default function CustomerApp() {
         </div>
       </div>
 
-      {/* 옵션 선택 모달 */}
       {selectedMenu && (
         <div
           style={{
@@ -947,7 +957,6 @@ export default function CustomerApp() {
         </div>
       )}
 
-      {/* 하단 장바구니 및 결제 영역: 화면의 최대 48%만 사용 */}
       <div
         style={{
           backgroundColor: colors.surface,
@@ -961,7 +970,6 @@ export default function CustomerApp() {
           flexShrink: 0
         }}
       >
-        {/* 주문표 */}
         <div
           style={{
             maxHeight: '150px',
@@ -1118,7 +1126,6 @@ export default function CustomerApp() {
           )}
         </div>
 
-        {/* 포인트 사용 및 결제 정보 */}
         <div
           style={{
             backgroundColor: colors.bg,
