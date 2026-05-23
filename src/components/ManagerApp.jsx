@@ -165,90 +165,91 @@ export default function ManagerApp() {
   }, [newMenuCategory]);
 
   const handleVerifyQr = async () => {
-    const qrCode = normalizeQrCode(qrInput);
+  const qrCode = normalizeQrCode(qrInput);
 
-    setQrMessage('');
+  setQrMessage('');
 
-    if (!qrCode) {
-      setQrMessage('QR 코드를 스캔하거나 숫자 6자리 코드를 입력해주세요.');
+  if (!qrCode) {
+    setQrMessage('QR 코드를 스캔하거나 숫자 6자리 코드를 입력해주세요.');
+    return;
+  }
+
+  if (qrCode.length !== 6) {
+    setQrMessage('QR 코드는 숫자 6자리여야 합니다.');
+    return;
+  }
+
+  try {
+    setQrChecking(true);
+
+    const orderQuery = query(
+      collection(db, 'orders'),
+      where('qrCode', '==', qrCode)
+    );
+
+    const orderSnapshot = await getDocs(orderQuery);
+
+    if (orderSnapshot.empty) {
+      setQrMessage('해당 QR 코드와 일치하는 주문을 찾을 수 없습니다.');
       return;
     }
 
-    if (qrCode.length !== 6) {
-      setQrMessage('QR 코드는 숫자 6자리여야 합니다.');
-      return;
-    }
+    const orderDocument = orderSnapshot.docs[0];
+    const orderData = orderDocument.data();
+    const orderId = orderDocument.id;
+    const orderRef = doc(db, 'orders', orderId);
 
-    try {
-      setQrChecking(true);
-
-      const orderQuery = query(
-        collection(db, 'orders'),
-        where('qrCode', '==', qrCode)
-      );
-
-      const orderSnapshot = await getDocs(orderQuery);
-
-      if (orderSnapshot.empty) {
-        setQrMessage('해당 QR 코드와 일치하는 주문을 찾을 수 없습니다.');
-        return;
-      }
-
-      const orderDocument = orderSnapshot.docs[0];
-      const orderData = orderDocument.data();
-      const orderId = orderDocument.id;
-      const orderRef = doc(db, 'orders', orderId);
-
-      if (orderData.qrVerified === true) {
-        setQrMessage(`이미 확인된 주문입니다. 주문 코드: ${qrCode}`);
-        setQrInput('');
-
-        handlePrint(
-          {
-            id: orderId,
-            ...orderData,
-          },
-          'order'
-        );
-
-        return;
-      }
-
-      const now = Date.now();
-
-      const updatedOrder = {
-        id: orderId,
-        ...orderData,
-        qrVerified: true,
-        qrVerifiedAt: now,
-        paymentStatus: 'completed',
-        paidAt: now,
-        status: orderData.status || 'pending',
-        updatedAt: now,
-      };
-
-      await updateDoc(orderRef, {
-        qrVerified: true,
-        qrVerifiedAt: now,
-        paymentStatus: 'completed',
-        paidAt: now,
-        status: orderData.status || 'pending',
-        updatedAt: now,
-      });
-
-      setQrMessage(`QR 확인 완료! 주문 코드 ${qrCode} 주문이 접수되었습니다.`);
+    if (orderData.qrVerified === true) {
+      setQrMessage(`이미 QR 확인된 주문입니다. 결제 완료는 담당자가 버튼으로 처리해주세요. 주문 코드: ${qrCode}`);
       setQrInput('');
       setActiveTab('pending');
-
-      // QR 확인과 동시에 주방용 주문서 자동 출력
-      handlePrint(updatedOrder, 'order');
-    } catch (error) {
-      console.error('QR 확인 실패:', error);
-      setQrMessage('QR 확인 중 오류가 발생했습니다.');
-    } finally {
-      setQrChecking(false);
+      return;
     }
-  };
+
+    const now = Date.now();
+
+    const updatedOrder = {
+      id: orderId,
+      ...orderData,
+      qrVerified: true,
+      qrVerifiedAt: now,
+
+      // QR 확인은 주문 접수만 의미합니다.
+      // 결제 완료는 결제 완료 버튼을 눌렀을 때만 처리합니다.
+      paymentStatus: orderData.paymentStatus || 'pending',
+      paidAt: orderData.paidAt || null,
+
+      status: orderData.status || 'pending',
+      updatedAt: now,
+    };
+
+    await updateDoc(orderRef, {
+      qrVerified: true,
+      qrVerifiedAt: now,
+
+      // 중요:
+      // QR 스캔 시에는 결제 완료 처리하지 않음
+      paymentStatus: orderData.paymentStatus || 'pending',
+      paidAt: orderData.paidAt || null,
+
+      status: orderData.status || 'pending',
+      updatedAt: now,
+    });
+
+    setQrMessage(`QR 확인 완료! 주문 코드 ${qrCode} 주문이 접수되었습니다. 결제 완료는 담당자가 버튼을 눌러주세요.`);
+    setQrInput('');
+    setActiveTab('pending');
+
+    // QR 확인 시 주방 주문서는 출력할 수 있습니다.
+    // 단, 결제 상태는 아직 pending입니다.
+    handlePrint(updatedOrder, 'order');
+  } catch (error) {
+    console.error('QR 확인 실패:', error);
+    setQrMessage('QR 확인 중 오류가 발생했습니다.');
+  } finally {
+    setQrChecking(false);
+  }
+};
 
   const handleQrKeyDown = (event) => {
     if (event.key === 'Enter') {
@@ -848,7 +849,7 @@ export default function ManagerApp() {
                             color: order.paymentStatus === 'completed' ? colors.success : colors.danger,
                           }}
                         >
-                          {order.paymentStatus === 'completed' ? '✅ QR/결제 완료됨' : '⏳ 결제 대기중'}
+                          {order.paymentStatus === 'completed' ? '✅ QR/결제 완료됨' : '⏳ 결제 확인 필요'}
                         </span>
                       </div>
 
@@ -866,7 +867,7 @@ export default function ManagerApp() {
                         }}
                         disabled={order.paymentStatus === 'completed'}
                       >
-                        {order.paymentStatus === 'completed' ? '결제 완료됨' : '결제 완료 (주문서 출력)'}
+                        {order.paymentStatus === 'completed' ? '결제 완료됨' : '담당자 결제완료'}
                       </button>
 
                       <button
