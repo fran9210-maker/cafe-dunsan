@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { db } from '../firebase';
 import {
   collection,
@@ -119,6 +119,7 @@ export default function ManagerApp() {
   const [qrInput, setQrInput] = useState('');
   const [qrMessage, setQrMessage] = useState('');
   const [qrChecking, setQrChecking] = useState(false);
+  const qrInputRef = useRef(null);
 
   useEffect(() => {
     const q = query(collection(db, 'orders'));
@@ -250,6 +251,69 @@ export default function ManagerApp() {
   const handleQrInputChange = (event) => {
     setQrInput(normalizeQrCode(event.target.value));
   };
+  useEffect(() => {
+  let scanBuffer = '';
+  let scanTimer = null;
+
+  const focusQrInput = () => {
+    if (qrInputRef.current) {
+      qrInputRef.current.focus();
+    }
+  };
+
+  const handleGlobalKeyDown = (event) => {
+    const activeElement = document.activeElement;
+    const activeTag = activeElement?.tagName?.toLowerCase();
+
+    const isMenuTypingField =
+      activeTag === 'input' ||
+      activeTag === 'textarea' ||
+      activeTag === 'select';
+
+    const isQrInput = activeElement === qrInputRef.current;
+
+    // 메뉴 관리나 다른 입력창에 타이핑 중이면 QR 전역 감지 방지
+    // 단, QR 입력창은 허용
+    if (isMenuTypingField && !isQrInput) {
+      return;
+    }
+
+    if (event.key === 'Enter') {
+      const qrCode = normalizeQrCode(scanBuffer || qrInputRef.current?.value || '');
+
+      if (qrCode.length === 6) {
+        event.preventDefault();
+        setQrInput(qrCode);
+        handleVerifyQr(qrCode);
+      }
+
+      scanBuffer = '';
+      return;
+    }
+
+    if (/^[0-9]$/.test(event.key)) {
+      scanBuffer += event.key;
+      setQrInput(normalizeQrCode(scanBuffer));
+
+      focusQrInput();
+
+      clearTimeout(scanTimer);
+      scanTimer = setTimeout(() => {
+        scanBuffer = '';
+      }, 700);
+    }
+  };
+
+  window.addEventListener('keydown', handleGlobalKeyDown);
+
+  focusQrInput();
+
+  return () => {
+    window.removeEventListener('keydown', handleGlobalKeyDown);
+    clearTimeout(scanTimer);
+  };
+}, []);
+
 
   const handleComplete = async (orderId) => {
     try {
@@ -633,10 +697,11 @@ export default function ManagerApp() {
             }}
           >
             <input
-              value={qrInput}
-              onChange={handleQrInputChange}
-              onKeyDown={handleQrKeyDown}
-              placeholder="예: 482931"
+              ref={qrInputRef}
+  value={qrInput}
+  onChange={handleQrInputChange}
+  onKeyDown={handleQrKeyDown}
+  placeholder="예: 482931"
               inputMode="numeric"
               maxLength={6}
               autoFocus
