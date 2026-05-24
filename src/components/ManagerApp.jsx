@@ -16,8 +16,6 @@ import { colors, Logo } from '../utils/theme';
 import Statistics from "./StatisticsView";
 
 // 주문 정렬용 함수
-// paidAt이 있으면 결제 완료 시간 기준으로 정렬하고,
-// 없으면 qrVerifiedAt, updatedAt, createdAt, date+time 순서로 안전하게 정렬합니다.
 function getOrderSortTime(order) {
   const value =
     order?.paidAt ||
@@ -92,6 +90,11 @@ function normalizeQrCode(value) {
     .slice(0, 6);
 }
 
+function getPhoneLast4(phone) {
+  const digitsOnly = String(phone || '').replace(/\D/g, '');
+  return digitsOnly.slice(-4);
+}
+
 export default function ManagerApp() {
   const [orders, setOrders] = useState([]);
   const [menus, setMenus] = useState([]);
@@ -102,7 +105,7 @@ export default function ManagerApp() {
   const [newMenuName, setNewMenuName] = useState('');
   const [newMenuPrice, setNewMenuPrice] = useState('');
   const [newMenuCategory, setNewMenuCategory] = useState('');
-  
+
   const [useHotIce, setUseHotIce] = useState(false);
   const [hotPrice, setHotPrice] = useState(0);
   const [icePrice, setIcePrice] = useState(0);
@@ -114,8 +117,6 @@ export default function ManagerApp() {
   const [qrChecking, setQrChecking] = useState(false);
 
   useEffect(() => {
-    // createdAt이 없는 주문도 누락되지 않도록 orderBy를 제거하고,
-    // 가져온 뒤 프론트에서 안전하게 최신순 정렬합니다.
     const q = query(collection(db, 'orders'));
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
@@ -165,91 +166,82 @@ export default function ManagerApp() {
   }, [newMenuCategory]);
 
   const handleVerifyQr = async () => {
-  const qrCode = normalizeQrCode(qrInput);
+    const qrCode = normalizeQrCode(qrInput);
 
-  setQrMessage('');
+    setQrMessage('');
 
-  if (!qrCode) {
-    setQrMessage('QR 코드를 스캔하거나 숫자 6자리 코드를 입력해주세요.');
-    return;
-  }
-
-  if (qrCode.length !== 6) {
-    setQrMessage('QR 코드는 숫자 6자리여야 합니다.');
-    return;
-  }
-
-  try {
-    setQrChecking(true);
-
-    const orderQuery = query(
-      collection(db, 'orders'),
-      where('qrCode', '==', qrCode)
-    );
-
-    const orderSnapshot = await getDocs(orderQuery);
-
-    if (orderSnapshot.empty) {
-      setQrMessage('해당 QR 코드와 일치하는 주문을 찾을 수 없습니다.');
+    if (!qrCode) {
+      setQrMessage('QR 코드를 스캔하거나 숫자 6자리 코드를 입력해주세요.');
       return;
     }
 
-    const orderDocument = orderSnapshot.docs[0];
-    const orderData = orderDocument.data();
-    const orderId = orderDocument.id;
-    const orderRef = doc(db, 'orders', orderId);
+    if (qrCode.length !== 6) {
+      setQrMessage('QR 코드는 숫자 6자리여야 합니다.');
+      return;
+    }
 
-    if (orderData.qrVerified === true) {
-      setQrMessage(`이미 QR 확인된 주문입니다. 결제 완료는 담당자가 버튼으로 처리해주세요. 주문 코드: ${qrCode}`);
+    try {
+      setQrChecking(true);
+
+      const orderQuery = query(
+        collection(db, 'orders'),
+        where('qrCode', '==', qrCode)
+      );
+
+      const orderSnapshot = await getDocs(orderQuery);
+
+      if (orderSnapshot.empty) {
+        setQrMessage('해당 QR 코드와 일치하는 주문을 찾을 수 없습니다.');
+        return;
+      }
+
+      const orderDocument = orderSnapshot.docs[0];
+      const orderData = orderDocument.data();
+      const orderId = orderDocument.id;
+      const orderRef = doc(db, 'orders', orderId);
+
+      if (orderData.qrVerified === true) {
+        setQrMessage(`이미 QR 확인된 주문입니다. 결제 완료는 담당자가 버튼으로 처리해주세요. 주문 코드: ${qrCode}`);
+        setQrInput('');
+        setActiveTab('pending');
+        return;
+      }
+
+      const now = Date.now();
+
+      const updatedOrder = {
+        id: orderId,
+        ...orderData,
+        qrVerified: true,
+        qrVerifiedAt: now,
+        paymentStatus: orderData.paymentStatus || 'pending',
+        paidAt: orderData.paidAt || null,
+        status: orderData.status || 'pending',
+        updatedAt: now,
+      };
+
+      await updateDoc(orderRef, {
+        qrVerified: true,
+        qrVerifiedAt: now,
+        paymentStatus: orderData.paymentStatus || 'pending',
+        paidAt: orderData.paidAt || null,
+        status: orderData.status || 'pending',
+        updatedAt: now,
+      });
+
+      setQrMessage(`QR 확인 완료! 주문 코드 ${qrCode} 주문이 접수되었습니다. 결제 완료는 담당자가 버튼을 눌러주세요.`);
       setQrInput('');
       setActiveTab('pending');
-      return;
+
+      // QR 확인 시 주방 제조용 주문서 출력
+      handlePrint(updatedOrder, 'order');
+    } catch (error) {
+      console.error('QR 확인 실패:', error);
+      setQrMessage('QR 확인 중 오류가 발생했습니다.');
+    } finally {
+      setQrChecking(false);
     }
-
-    const now = Date.now();
-
-    const updatedOrder = {
-      id: orderId,
-      ...orderData,
-      qrVerified: true,
-      qrVerifiedAt: now,
-
-      // QR 확인은 주문 접수만 의미합니다.
-      // 결제 완료는 결제 완료 버튼을 눌렀을 때만 처리합니다.
-      paymentStatus: orderData.paymentStatus || 'pending',
-      paidAt: orderData.paidAt || null,
-
-      status: orderData.status || 'pending',
-      updatedAt: now,
-    };
-
-    await updateDoc(orderRef, {
-      qrVerified: true,
-      qrVerifiedAt: now,
-
-      // 중요:
-      // QR 스캔 시에는 결제 완료 처리하지 않음
-      paymentStatus: orderData.paymentStatus || 'pending',
-      paidAt: orderData.paidAt || null,
-
-      status: orderData.status || 'pending',
-      updatedAt: now,
-    });
-
-    setQrMessage(`QR 확인 완료! 주문 코드 ${qrCode} 주문이 접수되었습니다. 결제 완료는 담당자가 버튼을 눌러주세요.`);
-    setQrInput('');
-    setActiveTab('pending');
-
-    // QR 확인 시 주방 주문서는 출력할 수 있습니다.
-    // 단, 결제 상태는 아직 pending입니다.
-    handlePrint(updatedOrder, 'order');
-  } catch (error) {
-    console.error('QR 확인 실패:', error);
-    setQrMessage('QR 확인 중 오류가 발생했습니다.');
-  } finally {
-    setQrChecking(false);
-  }
-};
+  };
 
   const handleQrKeyDown = (event) => {
     if (event.key === 'Enter') {
@@ -289,6 +281,7 @@ export default function ManagerApp() {
         updatedAt: paidAt,
       });
 
+      // 결제 완료 시 고객 영수증 출력
       handlePrint(
         {
           ...order,
@@ -298,7 +291,7 @@ export default function ManagerApp() {
           paidAt,
           updatedAt: paidAt,
         },
-        ''receipt'
+        'receipt'
       );
     } catch (error) {
       console.error("결제 상태 업데이트 실패:", error);
@@ -314,13 +307,18 @@ export default function ManagerApp() {
     }
 
     const isReceipt = type === 'receipt';
-    const title = isReceipt ? '영수증 (고객용)' : '주문서 (주방용)';
-    const storeName = isReceipt ? '그대, 요한을 만나다' : '[주방 제조용 주문서]';
+    const title = isReceipt ? '고객영수증' : '주문서 (주방용)';
+    const storeName = isReceipt ? '고객영수증' : '[주방 제조용 주문서]';
 
     const phoneText = order.phone ? formatPhone(order.phone) : '번호 없음';
     const orderDate = order.date || '';
     const orderTime = order.time || '';
-    const orderCode = order.qrCode || String(order.id || '').slice(-4).toUpperCase();
+
+    // 고객 영수증은 전화번호 뒷 4자리, 주방 주문서는 QR 코드 사용
+    const phoneLast4 = getPhoneLast4(order.phone);
+    const orderCode = isReceipt
+      ? phoneLast4 || String(order.id || '').slice(-4).toUpperCase()
+      : order.qrCode || String(order.id || '').slice(-4).toUpperCase();
 
     const itemsHtml = Array.isArray(order.items)
       ? order.items.map((item) => `
@@ -407,11 +405,13 @@ export default function ManagerApp() {
               margin-bottom: 20px;
             }
 
-            .qr-code {
+            .receipt-order-num {
               text-align: center;
-              font-size: 16px;
+              font-size: 20px;
               font-weight: bold;
-              margin-bottom: 10px;
+              margin-bottom: 18px;
+              padding: 8px;
+              border: 1px solid #000;
             }
 
             .sub-row {
@@ -430,7 +430,7 @@ export default function ManagerApp() {
           </div>
 
           ${!isReceipt ? `<div class="order-num">주문번호: ${orderCode}</div>` : ''}
-          ${isReceipt ? `<div class="qr-code">주문 코드: ${orderCode}</div>` : ''}
+          ${isReceipt ? `<div class="receipt-order-num">주문번호: ${orderCode}</div>` : ''}
 
           <div>
             ${itemsHtml}
@@ -567,11 +567,8 @@ export default function ManagerApp() {
     fontSize: '16px',
   });
 
-  // QR 확인된 주문만 매니저 화면/통계/목록에 노출
   const verifiedOrders = orders.filter((order) => order.qrVerified === true);
-
   const pendingOrders = verifiedOrders.filter((order) => order.status === 'pending');
-
   const completedOrders = verifiedOrders.filter((order) => order.status === 'completed');
 
   return (
@@ -785,7 +782,7 @@ export default function ManagerApp() {
                         대기 중
                       </span>
                     </div>
-                    
+
                     <div style={{ flex: 1 }}>
                       {Array.isArray(order.items) && order.items.length > 0 ? (
                         order.items.map((item, idx) => (
@@ -1322,7 +1319,7 @@ export default function ManagerApp() {
                       </div>
                     )}
                   </div>
-                  
+
                   <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
                     <label
                       style={{
@@ -1393,7 +1390,7 @@ export default function ManagerApp() {
                 if (categoryMenus.length === 0) {
                   return null;
                 }
-                
+
                 return (
                   <div
                     key={cat.id}
