@@ -864,7 +864,7 @@ export default function ManagerApp() {
             매니저 앱 시작
           </button>
 
-          <div
+                    <div
             style={{
               marginTop: '18px',
               padding: '14px',
@@ -873,14 +873,12 @@ export default function ManagerApp() {
               color: colors.muted || '#9CA3AF',
               fontSize: '13px',
               lineHeight: 1.5,
+              textAlign: 'center',
             }}
           >
-            비밀번호 변경은{' '}
-            <b style={{ color: colors.primary || colors.accent || '#FACC15' }}>
-              ManagerApp.jsx 상단의 MANAGER_PASSWORD
-            </b>
-            {' '}값을 수정하세요.
+            비밀번호는 관리자에게 문의하세요.
           </div>
+
         </form>
       </div>
     );
