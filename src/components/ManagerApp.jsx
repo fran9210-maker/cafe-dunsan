@@ -744,7 +744,149 @@ export default function ManagerApp() {
   const pendingOrders = verifiedOrders.filter((order) => order.status === 'pending');
   const completedOrders = verifiedOrders.filter((order) => order.status === 'completed');
 
-  return (
+  if (!isManagerUnlocked) {
+    return (
+      <div
+        style={{
+          minHeight: '100vh',
+          backgroundColor: colors.bg || colors.background || '#000000',
+          color: colors.text || colors.white || '#FFFFFF',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: '24px',
+          fontFamily: 'sans-serif',
+        }}
+      >
+        <form
+          onSubmit={handleManagerPasswordSubmit}
+          style={{
+            width: '100%',
+            maxWidth: '420px',
+            backgroundColor: colors.card || '#1F2937',
+            border: `1px solid ${colors.border || '#374151'}`,
+            borderRadius: '20px',
+            padding: '32px',
+            boxShadow: '0 20px 60px rgba(0,0,0,0.45)',
+          }}
+        >
+          <div style={{ textAlign: 'center', marginBottom: '24px' }}>
+            <Logo />
+
+            <h1
+              style={{
+                fontSize: '28px',
+                fontWeight: '900',
+                margin: '18px 0 8px',
+                color: colors.primary || colors.accent || '#FACC15',
+              }}
+            >
+              매니저 앱 잠금
+            </h1>
+
+            <p
+              style={{
+                margin: 0,
+                color: colors.muted || '#9CA3AF',
+                fontSize: '15px',
+                lineHeight: 1.5,
+              }}
+            >
+              매니저 화면을 사용하려면 비밀번호를 입력해주세요.
+            </p>
+          </div>
+
+          <label
+            style={{
+              display: 'block',
+              marginBottom: '8px',
+              color: colors.text || colors.white || '#FFFFFF',
+              fontWeight: '700',
+            }}
+          >
+            비밀번호
+          </label>
+
+          <input
+            type="password"
+            value={managerPasswordInput}
+            onChange={(event) => {
+              setManagerPasswordInput(event.target.value);
+              setManagerPasswordError('');
+            }}
+            autoFocus
+            placeholder="비밀번호 입력"
+            style={{
+              width: '100%',
+              boxSizing: 'border-box',
+              padding: '16px',
+              borderRadius: '12px',
+              border: `1px solid ${
+                managerPasswordError
+                  ? '#EF4444'
+                  : colors.border || '#374151'
+              }`,
+              backgroundColor: '#111827',
+              color: '#FFFFFF',
+              fontSize: '18px',
+              outline: 'none',
+              marginBottom: '12px',
+            }}
+          />
+
+          {managerPasswordError && (
+            <div
+              style={{
+                color: '#F87171',
+                fontSize: '14px',
+                fontWeight: '700',
+                marginBottom: '14px',
+              }}
+            >
+              {managerPasswordError}
+            </div>
+          )}
+
+          <button
+            type="submit"
+            style={{
+              width: '100%',
+              padding: '16px',
+              borderRadius: '12px',
+              border: 'none',
+              backgroundColor: colors.primary || colors.accent || '#FACC15',
+              color: '#111827',
+              fontSize: '18px',
+              fontWeight: '900',
+              cursor: 'pointer',
+            }}
+          >
+            매니저 앱 시작
+          </button>
+
+          <div
+            style={{
+              marginTop: '18px',
+              padding: '14px',
+              borderRadius: '12px',
+              backgroundColor: '#111827',
+              color: colors.muted || '#9CA3AF',
+              fontSize: '13px',
+              lineHeight: 1.5,
+            }}
+          >
+            비밀번호 변경은{' '}
+            <b style={{ color: colors.primary || colors.accent || '#FACC15' }}>
+              ManagerApp.jsx 상단의 MANAGER_PASSWORD
+            </b>
+            {' '}값을 수정하세요.
+          </div>
+        </form>
+      </div>
+    );
+  }
+
+   return (
     <div
       onClick={(event) => {
         const tagName = event.target?.tagName?.toLowerCase();
