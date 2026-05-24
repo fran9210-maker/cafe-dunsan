@@ -15,6 +15,13 @@ import {
 import { colors, Logo } from '../utils/theme';
 import Statistics from "./StatisticsView";
 
+// ======================================================
+// 매니저 앱 접속 비밀번호
+// 비밀번호를 바꾸려면 아래 값만 수정하세요.
+// 예: const MANAGER_PASSWORD = '새비밀번호';
+// ======================================================
+const MANAGER_PASSWORD = 'john0624';
+
 function getOrderSortTime(order) {
   const value =
     order?.paidAt ||
@@ -79,6 +86,10 @@ function getPhoneLast4(phone) {
 }
 
 export default function ManagerApp() {
+  const [isManagerUnlocked, setIsManagerUnlocked] = useState(false);
+  const [managerPasswordInput, setManagerPasswordInput] = useState('');
+  const [managerPasswordError, setManagerPasswordError] = useState('');
+
   const [orders, setOrders] = useState([]);
   const [menus, setMenus] = useState([]);
   const [categories, setCategories] = useState([]);
@@ -105,6 +116,20 @@ export default function ManagerApp() {
   const verifyTimerRef = useRef(null);
   const lastVerifyRef = useRef('');
   const qrCheckingRef = useRef(false);
+  const handleManagerPasswordSubmit = (event) => {
+    event.preventDefault();
+
+    if (managerPasswordInput === MANAGER_PASSWORD) {
+      setIsManagerUnlocked(true);
+      setManagerPasswordInput('');
+      setManagerPasswordError('');
+      return;
+    }
+
+    setManagerPasswordError('비밀번호가 올바르지 않습니다.');
+    setManagerPasswordInput('');
+  };
+
 
   useEffect(() => {
     const q = query(collection(db, 'orders'));
