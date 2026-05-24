@@ -298,7 +298,7 @@ export default function ManagerApp() {
           paidAt,
           updatedAt: paidAt,
         },
-        'order'
+        ''receipt'
       );
     } catch (error) {
       console.error("결제 상태 업데이트 실패:", error);
