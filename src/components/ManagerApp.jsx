@@ -15,7 +15,6 @@ import {
 import { colors, Logo } from '../utils/theme';
 import Statistics from "./StatisticsView";
 
-// 주문 정렬용 함수
 function getOrderSortTime(order) {
   const value =
     order?.paidAt ||
@@ -84,10 +83,15 @@ function normalizeQrCode(value) {
     return '';
   }
 
-  return String(value)
-    .trim()
-    .replace(/[^0-9]/g, '')
-    .slice(0, 6);
+  const text = String(value).trim();
+
+  const matched = text.match(/\d{6}/);
+
+  if (matched) {
+    return matched[0];
+  }
+
+  return text.replace(/[^0-9]/g, '').slice(0, 6);
 }
 
 function getPhoneLast4(phone) {
@@ -165,8 +169,8 @@ export default function ManagerApp() {
     return () => unsubscribe();
   }, [newMenuCategory]);
 
-  const handleVerifyQr = async () => {
-    const qrCode = normalizeQrCode(qrInput);
+  const handleVerifyQr = async (inputValue) => {
+    const qrCode = normalizeQrCode(inputValue || qrInput);
 
     setQrMessage('');
 
@@ -176,7 +180,7 @@ export default function ManagerApp() {
     }
 
     if (qrCode.length !== 6) {
-      setQrMessage('QR 코드는 숫자 6자리여야 합니다.');
+      setQrMessage(`QR 코드는 숫자 6자리여야 합니다. 현재 인식값: ${qrCode}`);
       return;
     }
 
@@ -191,7 +195,7 @@ export default function ManagerApp() {
       const orderSnapshot = await getDocs(orderQuery);
 
       if (orderSnapshot.empty) {
-        setQrMessage('해당 QR 코드와 일치하는 주문을 찾을 수 없습니다.');
+        setQrMessage(`해당 QR 코드와 일치하는 주문을 찾을 수 없습니다. 인식된 코드: ${qrCode}`);
         return;
       }
 
@@ -201,24 +205,13 @@ export default function ManagerApp() {
       const orderRef = doc(db, 'orders', orderId);
 
       if (orderData.qrVerified === true) {
-        setQrMessage(`이미 QR 확인된 주문입니다. 결제 완료는 담당자가 버튼으로 처리해주세요. 주문 코드: ${qrCode}`);
+        setQrMessage(`이미 QR 확인된 주문입니다. 주문 코드: ${qrCode}`);
         setQrInput('');
         setActiveTab('pending');
         return;
       }
 
       const now = Date.now();
-
-      const updatedOrder = {
-        id: orderId,
-        ...orderData,
-        qrVerified: true,
-        qrVerifiedAt: now,
-        paymentStatus: orderData.paymentStatus || 'pending',
-        paidAt: orderData.paidAt || null,
-        status: orderData.status || 'pending',
-        updatedAt: now,
-      };
 
       await updateDoc(orderRef, {
         qrVerified: true,
@@ -229,15 +222,19 @@ export default function ManagerApp() {
         updatedAt: now,
       });
 
-      setQrMessage(`QR 확인 완료! 주문 코드 ${qrCode} 주문이 접수되었습니다. 결제 완료는 담당자가 버튼을 눌러주세요.`);
+      setQrMessage(`QR 확인 완료! 주문 코드 ${qrCode} 주문이 접수되었습니다.`);
       setQrInput('');
       setActiveTab('pending');
 
-      // QR 확인 시 주방 제조용 주문서 출력
-      handlePrint(updatedOrder, 'order');
+      /*
+        중요:
+        QR 확인 직후 자동 프린트는 일부 브라우저에서 팝업 차단될 수 있습니다.
+        그래서 QR 확인은 안정적으로 처리하고,
+        주문서는 제조 대기 카드의 "주문서 재출력 (주방용)" 버튼으로 출력하도록 했습니다.
+      */
     } catch (error) {
       console.error('QR 확인 실패:', error);
-      setQrMessage('QR 확인 중 오류가 발생했습니다.');
+      setQrMessage(`QR 확인 중 오류가 발생했습니다: ${error.message}`);
     } finally {
       setQrChecking(false);
     }
@@ -245,7 +242,8 @@ export default function ManagerApp() {
 
   const handleQrKeyDown = (event) => {
     if (event.key === 'Enter') {
-      handleVerifyQr();
+      event.preventDefault();
+      handleVerifyQr(event.currentTarget.value);
     }
   };
 
@@ -281,7 +279,6 @@ export default function ManagerApp() {
         updatedAt: paidAt,
       });
 
-      // 결제 완료 시 고객 영수증 출력
       handlePrint(
         {
           ...order,
@@ -314,7 +311,6 @@ export default function ManagerApp() {
     const orderDate = order.date || '';
     const orderTime = order.time || '';
 
-    // 고객 영수증은 전화번호 뒷 4자리, 주방 주문서는 QR 코드 사용
     const phoneLast4 = getPhoneLast4(order.phone);
     const orderCode = isReceipt
       ? phoneLast4 || String(order.id || '').slice(-4).toUpperCase()
@@ -661,7 +657,7 @@ export default function ManagerApp() {
             />
 
             <button
-              onClick={handleVerifyQr}
+              onClick={() => handleVerifyQr(qrInput)}
               disabled={qrChecking}
               style={{
                 height: '52px',
@@ -846,7 +842,7 @@ export default function ManagerApp() {
                             color: order.paymentStatus === 'completed' ? colors.success : colors.danger,
                           }}
                         >
-                          {order.paymentStatus === 'completed' ? '✅ QR/결제 완료됨' : '⏳ 결제 확인 필요'}
+                          {order.paymentStatus === 'completed' ? '✅ 결제 완료됨' : '⏳ 결제 확인 필요'}
                         </span>
                       </div>
 
