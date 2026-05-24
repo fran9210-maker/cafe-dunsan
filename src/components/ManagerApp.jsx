@@ -27,23 +27,12 @@ function getOrderSortTime(order) {
 
   if (value) {
     try {
-      if (value?.toDate) {
-        return value.toDate().getTime();
-      }
-
-      if (value instanceof Date) {
-        return value.getTime();
-      }
-
-      if (typeof value === 'number') {
-        return value;
-      }
+      if (value?.toDate) return value.toDate().getTime();
+      if (value instanceof Date) return value.getTime();
+      if (typeof value === 'number') return value;
 
       const parsedDate = new Date(value);
-
-      if (!Number.isNaN(parsedDate.getTime())) {
-        return parsedDate.getTime();
-      }
+      if (!Number.isNaN(parsedDate.getTime())) return parsedDate.getTime();
     } catch (error) {
       return 0;
     }
@@ -51,19 +40,14 @@ function getOrderSortTime(order) {
 
   if (order?.date && order?.time) {
     const parsedDate = new Date(`${order.date} ${order.time}`);
-
-    if (!Number.isNaN(parsedDate.getTime())) {
-      return parsedDate.getTime();
-    }
+    if (!Number.isNaN(parsedDate.getTime())) return parsedDate.getTime();
   }
 
   return 0;
 }
 
 function formatPhone(phone) {
-  if (!phone) {
-    return '번호 없음';
-  }
+  if (!phone) return '번호 없음';
 
   const digitsOnly = String(phone).replace(/\D/g, '');
 
@@ -79,17 +63,12 @@ function formatPhone(phone) {
 }
 
 function normalizeQrCode(value) {
-  if (!value) {
-    return '';
-  }
+  if (!value) return '';
 
   const text = String(value).trim();
-
   const matched = text.match(/\d{6}/);
 
-  if (matched) {
-    return matched[0];
-  }
+  if (matched) return matched[0];
 
   return text.replace(/[^0-9]/g, '').slice(0, 6);
 }
@@ -119,7 +98,13 @@ export default function ManagerApp() {
   const [qrInput, setQrInput] = useState('');
   const [qrMessage, setQrMessage] = useState('');
   const [qrChecking, setQrChecking] = useState(false);
+
   const qrInputRef = useRef(null);
+  const scanBufferRef = useRef('');
+  const scanTimerRef = useRef(null);
+  const verifyTimerRef = useRef(null);
+  const lastVerifyRef = useRef('');
+  const qrCheckingRef = useRef(false);
 
   useEffect(() => {
     const q = query(collection(db, 'orders'));
@@ -170,6 +155,14 @@ export default function ManagerApp() {
     return () => unsubscribe();
   }, [newMenuCategory]);
 
+  const focusQrInput = () => {
+    setTimeout(() => {
+      if (qrInputRef.current) {
+        qrInputRef.current.focus();
+      }
+    }, 50);
+  };
+
   const handleVerifyQr = async (inputValue) => {
     const qrCode = normalizeQrCode(inputValue || qrInput);
 
@@ -177,26 +170,44 @@ export default function ManagerApp() {
 
     if (!qrCode) {
       setQrMessage('QR 코드를 스캔하거나 숫자 6자리 코드를 입력해주세요.');
+      focusQrInput();
       return;
     }
 
     if (qrCode.length !== 6) {
       setQrMessage(`QR 코드는 숫자 6자리여야 합니다. 현재 인식값: ${qrCode}`);
+      focusQrInput();
+      return;
+    }
+
+    if (qrCheckingRef.current) {
       return;
     }
 
     try {
+      qrCheckingRef.current = true;
       setQrChecking(true);
 
-      const orderQuery = query(
+      let orderQuery = query(
         collection(db, 'orders'),
         where('qrCode', '==', qrCode)
       );
 
-      const orderSnapshot = await getDocs(orderQuery);
+      let orderSnapshot = await getDocs(orderQuery);
+
+      if (orderSnapshot.empty) {
+        orderQuery = query(
+          collection(db, 'orders'),
+          where('qrCode', '==', Number(qrCode))
+        );
+
+        orderSnapshot = await getDocs(orderQuery);
+      }
 
       if (orderSnapshot.empty) {
         setQrMessage(`해당 QR 코드와 일치하는 주문을 찾을 수 없습니다. 인식된 코드: ${qrCode}`);
+        setQrInput('');
+        focusQrInput();
         return;
       }
 
@@ -209,6 +220,7 @@ export default function ManagerApp() {
         setQrMessage(`이미 QR 확인된 주문입니다. 주문 코드: ${qrCode}`);
         setQrInput('');
         setActiveTab('pending');
+        focusQrInput();
         return;
       }
 
@@ -226,94 +238,161 @@ export default function ManagerApp() {
       setQrMessage(`QR 확인 완료! 주문 코드 ${qrCode} 주문이 접수되었습니다.`);
       setQrInput('');
       setActiveTab('pending');
-
-      /*
-        중요:
-        QR 확인 직후 자동 프린트는 일부 브라우저에서 팝업 차단될 수 있습니다.
-        그래서 QR 확인은 안정적으로 처리하고,
-        주문서는 제조 대기 카드의 "주문서 재출력 (주방용)" 버튼으로 출력하도록 했습니다.
-      */
+      focusQrInput();
     } catch (error) {
       console.error('QR 확인 실패:', error);
       setQrMessage(`QR 확인 중 오류가 발생했습니다: ${error.message}`);
     } finally {
+      qrCheckingRef.current = false;
       setQrChecking(false);
     }
   };
 
+  const runQrVerify = (value) => {
+    const qrCode = normalizeQrCode(value);
+
+    if (qrCode.length !== 6) return;
+    if (qrCheckingRef.current) return;
+
+    const now = Date.now();
+    const duplicateKey = `${qrCode}_${Math.floor(now / 1500)}`;
+
+    if (lastVerifyRef.current === duplicateKey) return;
+
+    lastVerifyRef.current = duplicateKey;
+
+    setQrInput(qrCode);
+    handleVerifyQr(qrCode);
+  };
+
+  const scheduleQrVerify = (value) => {
+    const qrCode = normalizeQrCode(value);
+
+    setQrInput(qrCode);
+
+    if (verifyTimerRef.current) {
+      clearTimeout(verifyTimerRef.current);
+    }
+
+    if (qrCode.length === 6) {
+      verifyTimerRef.current = setTimeout(() => {
+        runQrVerify(qrCode);
+      }, 150);
+    }
+  };
+
   const handleQrKeyDown = (event) => {
-    if (event.key === 'Enter') {
+    if (event.key === 'Enter' || event.key === 'Tab') {
       event.preventDefault();
-      handleVerifyQr(event.currentTarget.value);
+
+      const qrCode = normalizeQrCode(
+        event.currentTarget.value || scanBufferRef.current
+      );
+
+      runQrVerify(qrCode);
+      scanBufferRef.current = '';
     }
   };
 
   const handleQrInputChange = (event) => {
-    setQrInput(normalizeQrCode(event.target.value));
+    scheduleQrVerify(event.target.value);
   };
+
+  const handleQrPaste = (event) => {
+    const pastedText = event.clipboardData?.getData('text') || '';
+    const qrCode = normalizeQrCode(pastedText);
+
+    if (qrCode.length === 6) {
+      event.preventDefault();
+      scheduleQrVerify(qrCode);
+    }
+  };
+
   useEffect(() => {
-  let scanBuffer = '';
-  let scanTimer = null;
+    const handleGlobalKeyDown = (event) => {
+      const activeElement = document.activeElement;
+      const activeTag = activeElement?.tagName?.toLowerCase();
+      const isQrInput = activeElement === qrInputRef.current;
 
-  const focusQrInput = () => {
-    if (qrInputRef.current) {
-      qrInputRef.current.focus();
-    }
-  };
+      const isTypingField =
+        activeTag === 'input' ||
+        activeTag === 'textarea' ||
+        activeTag === 'select';
 
-  const handleGlobalKeyDown = (event) => {
-    const activeElement = document.activeElement;
-    const activeTag = activeElement?.tagName?.toLowerCase();
+      if (isTypingField && !isQrInput) {
+        return;
+      }
 
-    const isMenuTypingField =
-      activeTag === 'input' ||
-      activeTag === 'textarea' ||
-      activeTag === 'select';
+      if (/^[0-9]$/.test(event.key)) {
+        scanBufferRef.current += event.key;
 
-    const isQrInput = activeElement === qrInputRef.current;
+        const qrCode = normalizeQrCode(scanBufferRef.current);
 
-    // 메뉴 관리나 다른 입력창에 타이핑 중이면 QR 전역 감지 방지
-    // 단, QR 입력창은 허용
-    if (isMenuTypingField && !isQrInput) {
-      return;
-    }
+        setQrInput(qrCode);
+        focusQrInput();
 
-    if (event.key === 'Enter') {
-      const qrCode = normalizeQrCode(scanBuffer || qrInputRef.current?.value || '');
+        if (scanTimerRef.current) {
+          clearTimeout(scanTimerRef.current);
+        }
+
+        if (verifyTimerRef.current) {
+          clearTimeout(verifyTimerRef.current);
+        }
+
+        if (qrCode.length === 6) {
+          verifyTimerRef.current = setTimeout(() => {
+            runQrVerify(qrCode);
+            scanBufferRef.current = '';
+          }, 150);
+
+          return;
+        }
+
+        scanTimerRef.current = setTimeout(() => {
+          scanBufferRef.current = '';
+        }, 1000);
+
+        return;
+      }
+
+      if (event.key === 'Enter' || event.key === 'Tab') {
+        const qrCode = normalizeQrCode(
+          scanBufferRef.current || qrInputRef.current?.value || ''
+        );
+
+        if (qrCode.length === 6) {
+          event.preventDefault();
+          runQrVerify(qrCode);
+        }
+
+        scanBufferRef.current = '';
+      }
+    };
+
+    const handleGlobalPaste = (event) => {
+      const pastedText = event.clipboardData?.getData('text') || '';
+      const qrCode = normalizeQrCode(pastedText);
 
       if (qrCode.length === 6) {
         event.preventDefault();
-        setQrInput(qrCode);
-        handleVerifyQr(qrCode);
+        focusQrInput();
+        scheduleQrVerify(qrCode);
       }
+    };
 
-      scanBuffer = '';
-      return;
-    }
+    window.addEventListener('keydown', handleGlobalKeyDown, true);
+    window.addEventListener('paste', handleGlobalPaste, true);
 
-    if (/^[0-9]$/.test(event.key)) {
-      scanBuffer += event.key;
-      setQrInput(normalizeQrCode(scanBuffer));
+    focusQrInput();
 
-      focusQrInput();
+    return () => {
+      window.removeEventListener('keydown', handleGlobalKeyDown, true);
+      window.removeEventListener('paste', handleGlobalPaste, true);
 
-      clearTimeout(scanTimer);
-      scanTimer = setTimeout(() => {
-        scanBuffer = '';
-      }, 700);
-    }
-  };
-
-  window.addEventListener('keydown', handleGlobalKeyDown);
-
-  focusQrInput();
-
-  return () => {
-    window.removeEventListener('keydown', handleGlobalKeyDown);
-    clearTimeout(scanTimer);
-  };
-}, []);
-
+      if (scanTimerRef.current) clearTimeout(scanTimerRef.current);
+      if (verifyTimerRef.current) clearTimeout(verifyTimerRef.current);
+    };
+  }, []);
 
   const handleComplete = async (orderId) => {
     try {
@@ -538,9 +617,7 @@ export default function ManagerApp() {
   const handleAddCategory = async (e) => {
     e.preventDefault();
 
-    if (!newCategoryName.trim()) {
-      return;
-    }
+    if (!newCategoryName.trim()) return;
 
     try {
       await addDoc(collection(db, 'categories'), {
@@ -556,9 +633,7 @@ export default function ManagerApp() {
   };
 
   const handleDeleteCategory = async (categoryId) => {
-    if (!window.confirm('삭제하시겠습니까?')) {
-      return;
-    }
+    if (!window.confirm('삭제하시겠습니까?')) return;
 
     try {
       await deleteDoc(doc(db, 'categories', categoryId));
@@ -604,9 +679,7 @@ export default function ManagerApp() {
   };
 
   const handleDeleteMenu = async (menuId) => {
-    if (!window.confirm('삭제하시겠습니까?')) {
-      return;
-    }
+    if (!window.confirm('삭제하시겠습니까?')) return;
 
     try {
       await deleteDoc(doc(db, 'menus', menuId));
@@ -627,12 +700,40 @@ export default function ManagerApp() {
     fontSize: '16px',
   });
 
+  const cardStyle = {
+    backgroundColor: colors.surface,
+    border: `1px solid ${colors.border}`,
+    borderRadius: '12px',
+    padding: '20px',
+  };
+
+  const inputStyle = {
+    padding: '10px',
+    backgroundColor: colors.bg,
+    color: colors.text,
+    border: `1px solid ${colors.border}`,
+    borderRadius: '6px',
+  };
+
   const verifiedOrders = orders.filter((order) => order.qrVerified === true);
   const pendingOrders = verifiedOrders.filter((order) => order.status === 'pending');
   const completedOrders = verifiedOrders.filter((order) => order.status === 'completed');
 
   return (
     <div
+      onClick={(event) => {
+        const tagName = event.target?.tagName?.toLowerCase();
+
+        const isEditable =
+          tagName === 'input' ||
+          tagName === 'textarea' ||
+          tagName === 'select' ||
+          tagName === 'button';
+
+        if (!isEditable) {
+          focusQrInput();
+        }
+      }}
       style={{
         backgroundColor: colors.bg,
         color: colors.text,
@@ -669,23 +770,13 @@ export default function ManagerApp() {
             marginBottom: '20px',
           }}
         >
-          <h3
-            style={{
-              margin: '0 0 12px 0',
-              color: colors.primary,
-            }}
-          >
+          <h3 style={{ margin: '0 0 12px 0', color: colors.primary }}>
             QR 코드 주문 확인
           </h3>
 
-          <p
-            style={{
-              margin: '0 0 12px 0',
-              color: colors.textDim,
-              fontSize: '14px',
-            }}
-          >
-            고객 화면의 QR 코드를 스캔하거나 숫자 6자리 코드를 입력하세요. 확인된 주문만 제조 대기 화면에 표시됩니다.
+          <p style={{ margin: '0 0 12px 0', color: colors.textDim, fontSize: '14px' }}>
+            고객 화면의 QR 코드를 스캔하거나 숫자 6자리 코드를 입력하세요.
+            6자리가 인식되면 자동으로 확인됩니다.
           </p>
 
           <div
@@ -698,10 +789,11 @@ export default function ManagerApp() {
           >
             <input
               ref={qrInputRef}
-  value={qrInput}
-  onChange={handleQrInputChange}
-  onKeyDown={handleQrKeyDown}
-  placeholder="예: 482931"
+              value={qrInput}
+              onChange={handleQrInputChange}
+              onKeyDown={handleQrKeyDown}
+              onPaste={handleQrPaste}
+              placeholder="예: 482931"
               inputMode="numeric"
               maxLength={6}
               autoFocus
@@ -775,793 +867,646 @@ export default function ManagerApp() {
         </div>
       </header>
 
-      <div>
-        {activeTab === 'pending' && (
-          <div>
-            <h3 style={{ color: colors.primary, marginBottom: '20px' }}>
-              제조 대기 중인 주문
-            </h3>
+      {activeTab === 'pending' && (
+        <div>
+          <h3 style={{ color: colors.primary, marginBottom: '20px' }}>
+            제조 대기 중인 주문
+          </h3>
 
-            <div
-              style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))',
-                gap: '20px',
-              }}
-            >
-              {pendingOrders.length === 0 ? (
-                <p style={{ color: colors.textDim }}>대기 중인 주문이 없습니다.</p>
-              ) : (
-                pendingOrders.map((order) => (
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))',
+              gap: '20px',
+            }}
+          >
+            {pendingOrders.length === 0 ? (
+              <p style={{ color: colors.textDim }}>대기 중인 주문이 없습니다.</p>
+            ) : (
+              pendingOrders.map((order) => (
+                <div
+                  key={order.id}
+                  style={{
+                    backgroundColor: '#1A1A1A',
+                    border: `2px solid ${colors.primary}`,
+                    borderRadius: '12px',
+                    padding: '20px',
+                  }}
+                >
                   <div
-                    key={order.id}
                     style={{
-                      backgroundColor: '#1A1A1A',
-                      border: `2px solid ${colors.primary}`,
-                      borderRadius: '12px',
-                      padding: '20px',
                       display: 'flex',
-                      flexDirection: 'column',
+                      justifyContent: 'space-between',
+                      borderBottom: `1px solid ${colors.border}`,
+                      paddingBottom: '10px',
+                      marginBottom: '10px',
                     }}
                   >
-                    <div
-                      style={{
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        borderBottom: `1px solid ${colors.border}`,
-                        paddingBottom: '10px',
-                        marginBottom: '10px',
-                      }}
-                    >
-                      <div>
-                        <div style={{ fontSize: '18px', fontWeight: 'bold' }}>
-                          {formatPhone(order.phone)}
-                        </div>
-
-                        <div
-                          style={{
-                            marginTop: '4px',
-                            color: colors.primary,
-                            fontSize: '14px',
-                            fontWeight: 'bold',
-                          }}
-                        >
-                          주문코드: {order.qrCode || String(order.id).slice(-4).toUpperCase()}
-                        </div>
+                    <div>
+                      <div style={{ fontSize: '18px', fontWeight: 'bold' }}>
+                        {formatPhone(order.phone)}
                       </div>
 
-                      <span
-                        style={{
-                          backgroundColor: colors.danger,
-                          color: '#fff',
-                          padding: '4px 8px',
-                          borderRadius: '4px',
-                          fontSize: '14px',
-                          height: 'fit-content',
-                        }}
-                      >
-                        대기 중
-                      </span>
-                    </div>
-
-                    <div style={{ flex: 1 }}>
-                      {Array.isArray(order.items) && order.items.length > 0 ? (
-                        order.items.map((item, idx) => (
-                          <div
-                            key={idx}
-                            style={{
-                              color: colors.text,
-                              marginBottom: '8px',
-                            }}
-                          >
-                            <div style={{ fontWeight: 'bold', fontSize: '16px' }}>
-                              - {item.name} ({item.quantity}개)
-                            </div>
-
-                            {(item.selectedHotIce || item.selectedShot) && (
-                              <div
-                                style={{
-                                  fontSize: '14px',
-                                  color: colors.textDim,
-                                  marginLeft: '15px',
-                                  marginTop: '4px',
-                                }}
-                              >
-                                {item.selectedHotIce && <span>[{item.selectedHotIce}] </span>}
-                                {item.selectedShot && <span>[샷 추가]</span>}
-                              </div>
-                            )}
-                          </div>
-                        ))
-                      ) : (
-                        <p style={{ color: colors.textDim }}>메뉴 정보 없음</p>
-                      )}
-                    </div>
-
-                    <div
-                      style={{
-                        display: 'flex',
-                        flexDirection: 'column',
-                        gap: '10px',
-                        marginTop: '20px',
-                        paddingTop: '15px',
-                        borderTop: `1px solid ${colors.border}`,
-                      }}
-                    >
                       <div
                         style={{
-                          display: 'flex',
-                          justifyContent: 'space-between',
-                          alignItems: 'center',
-                          marginBottom: '5px',
-                        }}
-                      >
-                        <span style={{ fontWeight: 'bold', fontSize: '18px' }}>
-                          총 {Number(order.totalPrice || 0).toLocaleString()}원
-                        </span>
-
-                        <span
-                          style={{
-                            fontSize: '14px',
-                            fontWeight: 'bold',
-                            color: order.paymentStatus === 'completed' ? colors.success : colors.danger,
-                          }}
-                        >
-                          {order.paymentStatus === 'completed' ? '✅ 결제 완료됨' : '⏳ 결제 확인 필요'}
-                        </span>
-                      </div>
-
-                      <button
-                        onClick={() => handlePaymentComplete(order)}
-                        style={{
-                          backgroundColor: order.paymentStatus === 'completed' ? colors.surface : colors.success,
-                          color: order.paymentStatus === 'completed' ? colors.textDim : '#fff',
-                          border: `1px solid ${colors.border}`,
-                          padding: '12px',
-                          borderRadius: '6px',
-                          fontWeight: 'bold',
-                          cursor: order.paymentStatus === 'completed' ? 'not-allowed' : 'pointer',
-                          fontSize: '16px',
-                        }}
-                        disabled={order.paymentStatus === 'completed'}
-                      >
-                        {order.paymentStatus === 'completed' ? '결제 완료됨' : '담당자 결제완료'}
-                      </button>
-
-                      <button
-                        onClick={() => handlePrint(order, 'order')}
-                        style={{
-                          backgroundColor: 'transparent',
+                          marginTop: '4px',
                           color: colors.primary,
-                          border: `1px solid ${colors.primary}`,
-                          padding: '12px',
-                          borderRadius: '6px',
+                          fontSize: '14px',
                           fontWeight: 'bold',
-                          cursor: 'pointer',
-                          fontSize: '16px',
                         }}
                       >
-                        주문서 재출력 (주방용)
-                      </button>
-
-                      <button
-                        onClick={() => handlePrint(order, 'receipt')}
-                        style={{
-                          backgroundColor: 'transparent',
-                          color: colors.text,
-                          border: `1px solid ${colors.border}`,
-                          padding: '12px',
-                          borderRadius: '6px',
-                          fontWeight: 'bold',
-                          cursor: 'pointer',
-                          fontSize: '16px',
-                        }}
-                      >
-                        영수증 프린트 (고객용)
-                      </button>
-
-                      <button
-                        onClick={() => handleComplete(order.id)}
-                        style={{
-                          backgroundColor: colors.primary,
-                          color: '#000',
-                          border: 'none',
-                          padding: '12px',
-                          borderRadius: '6px',
-                          fontWeight: 'bold',
-                          cursor: 'pointer',
-                          fontSize: '16px',
-                          marginTop: '10px',
-                        }}
-                      >
-                        조리 완료
-                      </button>
+                        주문코드: {order.qrCode || String(order.id).slice(-4).toUpperCase()}
+                      </div>
                     </div>
-                  </div>
-                ))
-              )}
-            </div>
-          </div>
-        )}
 
-        {activeTab === 'completed' && (
-          <div>
-            <h3 style={{ color: colors.success, marginBottom: '20px' }}>
-              제조 완료된 주문
-            </h3>
-
-            <div
-              style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))',
-                gap: '20px',
-              }}
-            >
-              {completedOrders.length === 0 ? (
-                <p style={{ color: colors.textDim }}>완료된 주문이 없습니다.</p>
-              ) : (
-                completedOrders.map((order) => (
-                  <div
-                    key={order.id}
-                    style={{
-                      backgroundColor: colors.surface,
-                      border: `1px solid ${colors.border}`,
-                      opacity: 0.7,
-                      borderRadius: '12px',
-                      padding: '20px',
-                    }}
-                  >
-                    <div
+                    <span
                       style={{
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        borderBottom: `1px solid ${colors.border}`,
-                        paddingBottom: '10px',
-                        marginBottom: '10px',
+                        backgroundColor: colors.danger,
+                        color: '#fff',
+                        padding: '4px 8px',
+                        borderRadius: '4px',
+                        fontSize: '14px',
+                        height: 'fit-content',
                       }}
                     >
-                      <div>
-                        <span
-                          style={{
-                            fontSize: '18px',
-                            fontWeight: 'bold',
-                            color: colors.textDim,
-                          }}
-                        >
-                          {formatPhone(order.phone)}
-                        </span>
+                      대기 중
+                    </span>
+                  </div>
 
-                        <div
-                          style={{
-                            marginTop: '4px',
-                            color: colors.primary,
-                            fontSize: '14px',
-                            fontWeight: 'bold',
-                          }}
-                        >
-                          주문코드: {order.qrCode || String(order.id).slice(-4).toUpperCase()}
-                        </div>
-                      </div>
-
-                      <span
-                        style={{
-                          backgroundColor: colors.success,
-                          color: '#fff',
-                          padding: '4px 8px',
-                          borderRadius: '4px',
-                          fontSize: '14px',
-                          height: 'fit-content',
-                        }}
-                      >
-                        완료됨
-                      </span>
-                    </div>
-
+                  <div>
                     {Array.isArray(order.items) && order.items.length > 0 ? (
                       order.items.map((item, idx) => (
-                        <div
-                          key={idx}
-                          style={{
-                            color: colors.textDim,
-                            marginBottom: '5px',
-                          }}
-                        >
-                          - {item.name} ({item.quantity}개)
+                        <div key={idx} style={{ color: colors.text, marginBottom: '8px' }}>
+                          <div style={{ fontWeight: 'bold', fontSize: '16px' }}>
+                            - {item.name} ({item.quantity}개)
+                          </div>
+
+                          {(item.selectedHotIce || item.selectedShot) && (
+                            <div
+                              style={{
+                                fontSize: '14px',
+                                color: colors.textDim,
+                                marginLeft: '15px',
+                                marginTop: '4px',
+                              }}
+                            >
+                              {item.selectedHotIce && <span>[{item.selectedHotIce}] </span>}
+                              {item.selectedShot && <span>[샷 추가]</span>}
+                            </div>
+                          )}
                         </div>
                       ))
                     ) : (
                       <p style={{ color: colors.textDim }}>메뉴 정보 없음</p>
                     )}
-
-                    <div
-                      style={{
-                        display: 'flex',
-                        flexDirection: 'column',
-                        gap: '8px',
-                        marginTop: '15px',
-                        paddingTop: '15px',
-                        borderTop: `1px solid ${colors.border}`,
-                      }}
-                    >
-                      <button
-                        onClick={() => handlePrint(order, 'receipt')}
-                        style={{
-                          backgroundColor: 'transparent',
-                          color: colors.text,
-                          border: `1px solid ${colors.border}`,
-                          padding: '10px',
-                          borderRadius: '6px',
-                          fontWeight: 'bold',
-                          cursor: 'pointer',
-                        }}
-                      >
-                        영수증 재출력
-                      </button>
-                    </div>
                   </div>
-                ))
-              )}
-            </div>
-          </div>
-        )}
 
-        {activeTab === 'list' && (
-          <div>
-            <h3 style={{ marginBottom: '20px' }}>전체 주문 내역</h3>
-
-            <div
-              style={{
-                backgroundColor: colors.surface,
-                borderRadius: '12px',
-                padding: '20px',
-                border: `1px solid ${colors.border}`,
-              }}
-            >
-              {verifiedOrders.length === 0 ? (
-                <p style={{ color: colors.textDim }}>주문 내역이 없습니다.</p>
-              ) : (
-                verifiedOrders.map((order) => (
                   <div
-                    key={order.id}
-                    style={{
-                      display: 'grid',
-                      gridTemplateColumns: '1fr 1.1fr 1.2fr 1fr 1fr',
-                      gap: '10px',
-                      padding: '10px 0',
-                      borderBottom: `1px solid ${colors.border}`,
-                      alignItems: 'center',
-                    }}
-                  >
-                    <span>{order.date || ''} {order.time || ''}</span>
-                    <span>{order.qrCode || String(order.id).slice(-4).toUpperCase()}</span>
-                    <span>{formatPhone(order.phone)}</span>
-                    <span>
-                      {order.status === 'pending'
-                        ? '대기 중'
-                        : order.status === 'completed'
-                          ? '완료됨'
-                          : order.status || '상태 없음'}
-                    </span>
-                    <span>{Number(order.totalPrice || 0).toLocaleString()}원</span>
-                  </div>
-                ))
-              )}
-            </div>
-          </div>
-        )}
-
-        {activeTab === 'stats' && (
-          <Statistics orders={verifiedOrders} menus={menus} />
-        )}
-
-        {activeTab === 'menu' && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '30px' }}>
-            <div
-              style={{
-                backgroundColor: colors.surface,
-                padding: '20px',
-                borderRadius: '12px',
-                border: `1px solid ${colors.border}`,
-              }}
-            >
-              <h3 style={{ marginBottom: '15px', color: colors.primary }}>
-                1. 카테고리 관리
-              </h3>
-
-              <form
-                onSubmit={handleAddCategory}
-                style={{
-                  display: 'flex',
-                  gap: '10px',
-                  marginBottom: '15px',
-                }}
-              >
-                <input
-                  type="text"
-                  placeholder="새 카테고리명 입력"
-                  value={newCategoryName}
-                  onChange={(e) => setNewCategoryName(e.target.value)}
-                  style={{
-                    flex: 1,
-                    padding: '10px',
-                    backgroundColor: colors.bg,
-                    color: colors.text,
-                    border: `1px solid ${colors.border}`,
-                    borderRadius: '6px',
-                  }}
-                />
-
-                <button
-                  type="submit"
-                  style={{
-                    backgroundColor: colors.secondary,
-                    color: '#000',
-                    border: 'none',
-                    padding: '10px 20px',
-                    borderRadius: '6px',
-                    fontWeight: 'bold',
-                    cursor: 'pointer',
-                  }}
-                >
-                  카테고리 추가
-                </button>
-              </form>
-
-              <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
-                {categories.map((cat) => (
-                  <div
-                    key={cat.id}
                     style={{
                       display: 'flex',
-                      alignItems: 'center',
-                      gap: '8px',
-                      backgroundColor: colors.bg,
-                      padding: '8px 12px',
-                      borderRadius: '20px',
-                      border: `1px solid ${colors.border}`,
+                      flexDirection: 'column',
+                      gap: '10px',
+                      marginTop: '20px',
+                      paddingTop: '15px',
+                      borderTop: `1px solid ${colors.border}`,
                     }}
                   >
-                    <span>{cat.name}</span>
-
-                    <button
-                      onClick={() => handleDeleteCategory(cat.id)}
-                      style={{
-                        background: 'none',
-                        border: 'none',
-                        color: colors.danger,
-                        cursor: 'pointer',
-                        fontSize: '16px',
-                        padding: '0',
-                      }}
-                    >
-                      &times;
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <div
-              style={{
-                backgroundColor: colors.surface,
-                padding: '20px',
-                borderRadius: '12px',
-                border: `1px solid ${colors.border}`,
-              }}
-            >
-              <h3 style={{ marginBottom: '15px', color: colors.primary }}>
-                2. 새 메뉴 추가
-              </h3>
-
-              <form
-                onSubmit={handleAddMenu}
-                style={{
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: '15px',
-                }}
-              >
-                <div style={{ display: 'flex', gap: '10px' }}>
-                  <select
-                    value={newMenuCategory}
-                    onChange={(e) => setNewMenuCategory(e.target.value)}
-                    style={{
-                      padding: '10px',
-                      backgroundColor: colors.bg,
-                      color: colors.text,
-                      border: `1px solid ${colors.border}`,
-                      borderRadius: '6px',
-                      width: '150px',
-                    }}
-                  >
-                    {categories.length === 0 ? (
-                      <option value="">카테고리 없음</option>
-                    ) : (
-                      categories.map((cat) => (
-                        <option key={cat.id} value={cat.name}>
-                          {cat.name}
-                        </option>
-                      ))
-                    )}
-                  </select>
-
-                  <input
-                    type="text"
-                    placeholder="메뉴명"
-                    value={newMenuName}
-                    onChange={(e) => setNewMenuName(e.target.value)}
-                    style={{
-                      flex: 1,
-                      padding: '10px',
-                      backgroundColor: colors.bg,
-                      color: colors.text,
-                      border: `1px solid ${colors.border}`,
-                      borderRadius: '6px',
-                    }}
-                  />
-
-                  <input
-                    type="number"
-                    placeholder="기본 가격"
-                    value={newMenuPrice}
-                    onChange={(e) => setNewMenuPrice(e.target.value)}
-                    style={{
-                      width: '150px',
-                      padding: '10px',
-                      backgroundColor: colors.bg,
-                      color: colors.text,
-                      border: `1px solid ${colors.border}`,
-                      borderRadius: '6px',
-                    }}
-                  />
-                </div>
-
-                <div
-                  style={{
-                    backgroundColor: colors.bg,
-                    padding: '15px',
-                    borderRadius: '8px',
-                    border: `1px solid ${colors.border}`,
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: '10px',
-                  }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
-                    <label
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '5px',
-                        cursor: 'pointer',
-                      }}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={useHotIce}
-                        onChange={(e) => setUseHotIce(e.target.checked)}
-                      />
-                      HOT / ICE 옵션 사용
-                    </label>
-
-                    {useHotIce && (
-                      <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
-                        <input
-                          type="number"
-                          placeholder="HOT 추가금액"
-                          value={hotPrice}
-                          onChange={(e) => setHotPrice(e.target.value)}
-                          style={{
-                            width: '120px',
-                            padding: '6px',
-                            backgroundColor: colors.surface,
-                            color: colors.text,
-                            border: `1px solid ${colors.border}`,
-                            borderRadius: '4px',
-                          }}
-                        />
-                        원
-
-                        <input
-                          type="number"
-                          placeholder="ICE 추가금액"
-                          value={icePrice}
-                          onChange={(e) => setIcePrice(e.target.value)}
-                          style={{
-                            width: '120px',
-                            padding: '6px',
-                            backgroundColor: colors.surface,
-                            color: colors.text,
-                            border: `1px solid ${colors.border}`,
-                            borderRadius: '4px',
-                          }}
-                        />
-                        원
-                      </div>
-                    )}
-                  </div>
-
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
-                    <label
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '5px',
-                        cursor: 'pointer',
-                      }}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={useShot}
-                        onChange={(e) => setUseShot(e.target.checked)}
-                      />
-                      샷 추가 옵션 사용
-                    </label>
-
-                    {useShot && (
-                      <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
-                        <input
-                          type="number"
-                          placeholder="샷 추가금액"
-                          value={shotPrice}
-                          onChange={(e) => setShotPrice(e.target.value)}
-                          style={{
-                            width: '120px',
-                            padding: '6px',
-                            backgroundColor: colors.surface,
-                            color: colors.text,
-                            border: `1px solid ${colors.border}`,
-                            borderRadius: '4px',
-                          }}
-                        />
-                        원
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                <button
-                  type="submit"
-                  style={{
-                    backgroundColor: colors.primary,
-                    color: '#000',
-                    border: 'none',
-                    padding: '12px',
-                    borderRadius: '6px',
-                    fontWeight: 'bold',
-                    cursor: 'pointer',
-                    fontSize: '16px',
-                  }}
-                >
-                  메뉴 등록하기
-                </button>
-              </form>
-            </div>
-
-            <div
-              style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))',
-                gap: '20px',
-              }}
-            >
-              {categories.map((cat) => {
-                const categoryMenus = menus.filter((menu) => menu.category === cat.name);
-
-                if (categoryMenus.length === 0) {
-                  return null;
-                }
-
-                return (
-                  <div
-                    key={cat.id}
-                    style={{
-                      backgroundColor: colors.surface,
-                      padding: '15px',
-                      borderRadius: '8px',
-                      border: `1px solid ${colors.border}`,
-                    }}
-                  >
-                    <h4
-                      style={{
-                        color: colors.primary,
-                        fontSize: '20px',
-                        margin: '0 0 15px 0',
-                        paddingBottom: '10px',
-                        borderBottom: `1px solid ${colors.border}`,
-                      }}
-                    >
-                      {cat.name}
-                    </h4>
-
                     <div
                       style={{
                         display: 'flex',
-                        flexDirection: 'column',
-                        gap: '15px',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        marginBottom: '5px',
                       }}
                     >
-                      {categoryMenus.map((menu) => (
-                        <div
-                          key={menu.id}
-                          style={{
-                            backgroundColor: colors.bg,
-                            padding: '12px',
-                            borderRadius: '6px',
-                            border: `1px solid ${colors.border}`,
-                          }}
-                        >
-                          <div
-                            style={{
-                              display: 'flex',
-                              justifyContent: 'space-between',
-                              alignItems: 'center',
-                              marginBottom: '8px',
-                            }}
-                          >
-                            <span
-                              style={{
-                                color: colors.text,
-                                fontWeight: 'bold',
-                                fontSize: '16px',
-                              }}
-                            >
-                              {menu.name}
-                            </span>
+                      <span style={{ fontWeight: 'bold', fontSize: '18px' }}>
+                        총 {Number(order.totalPrice || 0).toLocaleString()}원
+                      </span>
 
-                            <div
-                              style={{
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: '10px',
-                              }}
-                            >
-                              <span style={{ color: colors.textDim }}>
-                                {Number(menu.price || 0).toLocaleString()}원
-                              </span>
-
-                              <button
-                                onClick={() => handleDeleteMenu(menu.id)}
-                                style={{
-                                  backgroundColor: 'transparent',
-                                  color: colors.danger,
-                                  border: `1px solid ${colors.danger}`,
-                                  padding: '4px 8px',
-                                  borderRadius: '4px',
-                                  cursor: 'pointer',
-                                  fontSize: '12px',
-                                }}
-                              >
-                                삭제
-                              </button>
-                            </div>
-                          </div>
-
-                          {menu.options && (
-                            <div style={{ fontSize: '13px', color: colors.textDim }}>
-                              {menu.options.useHotIce && (
-                                <div>
-                                  └ HOT: +{menu.options.hotPrice}원 / ICE: +{menu.options.icePrice}원
-                                </div>
-                              )}
-
-                              {menu.options.useShot && (
-                                <div>
-                                  └ 샷 추가: +{menu.options.shotPrice}원
-                                </div>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                      ))}
+                      <span
+                        style={{
+                          fontSize: '14px',
+                          fontWeight: 'bold',
+                          color: order.paymentStatus === 'completed' ? colors.success : colors.danger,
+                        }}
+                      >
+                        {order.paymentStatus === 'completed' ? '✅ 결제 완료됨' : '⏳ 결제 확인 필요'}
+                      </span>
                     </div>
+
+                    <button
+                      onClick={() => handlePaymentComplete(order)}
+                      disabled={order.paymentStatus === 'completed'}
+                      style={{
+                        backgroundColor: order.paymentStatus === 'completed' ? colors.surface : colors.success,
+                        color: order.paymentStatus === 'completed' ? colors.textDim : '#fff',
+                        border: `1px solid ${colors.border}`,
+                        padding: '12px',
+                        borderRadius: '6px',
+                        fontWeight: 'bold',
+                        cursor: order.paymentStatus === 'completed' ? 'not-allowed' : 'pointer',
+                        fontSize: '16px',
+                      }}
+                    >
+                      {order.paymentStatus === 'completed' ? '결제 완료됨' : '담당자 결제완료'}
+                    </button>
+
+                    <button
+                      onClick={() => handlePrint(order, 'order')}
+                      style={{
+                        backgroundColor: 'transparent',
+                        color: colors.primary,
+                        border: `1px solid ${colors.primary}`,
+                        padding: '12px',
+                        borderRadius: '6px',
+                        fontWeight: 'bold',
+                        cursor: 'pointer',
+                        fontSize: '16px',
+                      }}
+                    >
+                      주문서 재출력 (주방용)
+                    </button>
+
+                    <button
+                      onClick={() => handlePrint(order, 'receipt')}
+                      style={{
+                        backgroundColor: 'transparent',
+                        color: colors.text,
+                        border: `1px solid ${colors.border}`,
+                        padding: '12px',
+                        borderRadius: '6px',
+                        fontWeight: 'bold',
+                        cursor: 'pointer',
+                        fontSize: '16px',
+                      }}
+                    >
+                      영수증 프린트 (고객용)
+                    </button>
+
+                    <button
+                      onClick={() => handleComplete(order.id)}
+                      style={{
+                        backgroundColor: colors.primary,
+                        color: '#000',
+                        border: 'none',
+                        padding: '12px',
+                        borderRadius: '6px',
+                        fontWeight: 'bold',
+                        cursor: 'pointer',
+                        fontSize: '16px',
+                      }}
+                    >
+                      조리 완료
+                    </button>
                   </div>
-                );
-              })}
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'completed' && (
+        <div>
+          <h3 style={{ color: colors.success, marginBottom: '20px' }}>
+            제조 완료된 주문
+          </h3>
+
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))',
+              gap: '20px',
+            }}
+          >
+            {completedOrders.length === 0 ? (
+              <p style={{ color: colors.textDim }}>완료된 주문이 없습니다.</p>
+            ) : (
+              completedOrders.map((order) => (
+                <div
+                  key={order.id}
+                  style={{
+                    ...cardStyle,
+                    opacity: 0.75,
+                  }}
+                >
+                  <div
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      borderBottom: `1px solid ${colors.border}`,
+                      paddingBottom: '10px',
+                      marginBottom: '10px',
+                    }}
+                  >
+                    <div>
+                      <div style={{ fontSize: '18px', fontWeight: 'bold', color: colors.textDim }}>
+                        {formatPhone(order.phone)}
+                      </div>
+
+                      <div
+                        style={{
+                          marginTop: '4px',
+                          color: colors.primary,
+                          fontSize: '14px',
+                          fontWeight: 'bold',
+                        }}
+                      >
+                        주문코드: {order.qrCode || String(order.id).slice(-4).toUpperCase()}
+                      </div>
+                    </div>
+
+                    <span
+                      style={{
+                        backgroundColor: colors.success,
+                        color: '#fff',
+                        padding: '4px 8px',
+                        borderRadius: '4px',
+                        fontSize: '14px',
+                        height: 'fit-content',
+                      }}
+                    >
+                      완료됨
+                    </span>
+                  </div>
+
+                  {Array.isArray(order.items) && order.items.length > 0 ? (
+                    order.items.map((item, idx) => (
+                      <div key={idx} style={{ color: colors.textDim, marginBottom: '5px' }}>
+                        - {item.name} ({item.quantity}개)
+                      </div>
+                    ))
+                  ) : (
+                    <p style={{ color: colors.textDim }}>메뉴 정보 없음</p>
+                  )}
+
+                  <button
+                    onClick={() => handlePrint(order, 'receipt')}
+                    style={{
+                      marginTop: '15px',
+                      backgroundColor: 'transparent',
+                      color: colors.text,
+                      border: `1px solid ${colors.border}`,
+                      padding: '10px',
+                      borderRadius: '6px',
+                      fontWeight: 'bold',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    영수증 재출력
+                  </button>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'list' && (
+        <div>
+          <h3 style={{ marginBottom: '20px' }}>전체 주문 내역</h3>
+
+          <div style={cardStyle}>
+            {verifiedOrders.length === 0 ? (
+              <p style={{ color: colors.textDim }}>주문 내역이 없습니다.</p>
+            ) : (
+              verifiedOrders.map((order) => (
+                <div
+                  key={order.id}
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: '1fr 1fr 1fr 1fr 1fr',
+                    gap: '10px',
+                    padding: '10px 0',
+                    borderBottom: `1px solid ${colors.border}`,
+                    alignItems: 'center',
+                  }}
+                >
+                  <span>{order.date || ''} {order.time || ''}</span>
+                  <span>{order.qrCode || String(order.id).slice(-4).toUpperCase()}</span>
+                  <span>{formatPhone(order.phone)}</span>
+                  <span>
+                    {order.status === 'pending'
+                      ? '대기 중'
+                      : order.status === 'completed'
+                        ? '완료됨'
+                        : order.status || '상태 없음'}
+                  </span>
+                  <span>{Number(order.totalPrice || 0).toLocaleString()}원</span>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'stats' && (
+        <Statistics orders={verifiedOrders} menus={menus} />
+      )}
+
+      {activeTab === 'menu' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '30px' }}>
+          <div style={cardStyle}>
+            <h3 style={{ marginBottom: '15px', color: colors.primary }}>
+              1. 카테고리 관리
+            </h3>
+
+            <form
+              onSubmit={handleAddCategory}
+              style={{
+                display: 'flex',
+                gap: '10px',
+                marginBottom: '15px',
+              }}
+            >
+              <input
+                type="text"
+                placeholder="새 카테고리명 입력"
+                value={newCategoryName}
+                onChange={(e) => setNewCategoryName(e.target.value)}
+                style={{ ...inputStyle, flex: 1 }}
+              />
+
+              <button
+                type="submit"
+                style={{
+                  backgroundColor: colors.secondary,
+                  color: '#000',
+                  border: 'none',
+                  padding: '10px 20px',
+                  borderRadius: '6px',
+                  fontWeight: 'bold',
+                  cursor: 'pointer',
+                }}
+              >
+                카테고리 추가
+              </button>
+            </form>
+
+            <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+              {categories.map((cat) => (
+                <div
+                  key={cat.id}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    backgroundColor: colors.bg,
+                    padding: '8px 12px',
+                    borderRadius: '20px',
+                    border: `1px solid ${colors.border}`,
+                  }}
+                >
+                  <span>{cat.name}</span>
+
+                  <button
+                    onClick={() => handleDeleteCategory(cat.id)}
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      color: colors.danger,
+                      cursor: 'pointer',
+                      fontSize: '16px',
+                      padding: '0',
+                    }}
+                  >
+                    &times;
+                  </button>
+                </div>
+              ))}
             </div>
           </div>
-        )}
-      </div>
+
+          <div style={cardStyle}>
+            <h3 style={{ marginBottom: '15px', color: colors.primary }}>
+              2. 새 메뉴 추가
+            </h3>
+
+            <form
+              onSubmit={handleAddMenu}
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '15px',
+              }}
+            >
+              <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                <select
+                  value={newMenuCategory}
+                  onChange={(e) => setNewMenuCategory(e.target.value)}
+                  style={{ ...inputStyle, width: '150px' }}
+                >
+                  {categories.length === 0 ? (
+                    <option value="">카테고리 없음</option>
+                  ) : (
+                    categories.map((cat) => (
+                      <option key={cat.id} value={cat.name}>
+                        {cat.name}
+                      </option>
+                    ))
+                  )}
+                </select>
+
+                <input
+                  type="text"
+                  placeholder="메뉴명"
+                  value={newMenuName}
+                  onChange={(e) => setNewMenuName(e.target.value)}
+                  style={{ ...inputStyle, flex: 1 }}
+                />
+
+                <input
+                  type="number"
+                  placeholder="기본 가격"
+                  value={newMenuPrice}
+                  onChange={(e) => setNewMenuPrice(e.target.value)}
+                  style={{ ...inputStyle, width: '150px' }}
+                />
+              </div>
+
+              <div
+                style={{
+                  backgroundColor: colors.bg,
+                  padding: '15px',
+                  borderRadius: '8px',
+                  border: `1px solid ${colors.border}`,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '10px',
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '15px', flexWrap: 'wrap' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '5px', cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={useHotIce}
+                      onChange={(e) => setUseHotIce(e.target.checked)}
+                    />
+                    HOT / ICE 옵션 사용
+                  </label>
+
+                  {useHotIce && (
+                    <>
+                      <input
+                        type="number"
+                        placeholder="HOT 추가금액"
+                        value={hotPrice}
+                        onChange={(e) => setHotPrice(e.target.value)}
+                        style={{ ...inputStyle, width: '120px' }}
+                      />
+                      <span>원</span>
+
+                      <input
+                        type="number"
+                        placeholder="ICE 추가금액"
+                        value={icePrice}
+                        onChange={(e) => setIcePrice(e.target.value)}
+                        style={{ ...inputStyle, width: '120px' }}
+                      />
+                      <span>원</span>
+                    </>
+                  )}
+                </div>
+
+                <div style={{ display: 'flex', alignItems: 'center', gap: '15px', flexWrap: 'wrap' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '5px', cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={useShot}
+                      onChange={(e) => setUseShot(e.target.checked)}
+                    />
+                    샷 추가 옵션 사용
+                  </label>
+
+                  {useShot && (
+                    <>
+                      <input
+                        type="number"
+                        placeholder="샷 추가금액"
+                        value={shotPrice}
+                        onChange={(e) => setShotPrice(e.target.value)}
+                        style={{ ...inputStyle, width: '120px' }}
+                      />
+                      <span>원</span>
+                    </>
+                  )}
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                style={{
+                  backgroundColor: colors.primary,
+                  color: '#000',
+                  border: 'none',
+                  padding: '12px',
+                  borderRadius: '6px',
+                  fontWeight: 'bold',
+                  cursor: 'pointer',
+                  fontSize: '16px',
+                }}
+              >
+                메뉴 등록하기
+              </button>
+            </form>
+          </div>
+
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))',
+              gap: '20px',
+            }}
+          >
+            {categories.map((cat) => {
+              const categoryMenus = menus.filter((menu) => menu.category === cat.name);
+
+              if (categoryMenus.length === 0) return null;
+
+              return (
+                <div key={cat.id} style={cardStyle}>
+                  <h4
+                    style={{
+                      color: colors.primary,
+                      fontSize: '20px',
+                      margin: '0 0 15px 0',
+                      paddingBottom: '10px',
+                      borderBottom: `1px solid ${colors.border}`,
+                    }}
+                  >
+                    {cat.name}
+                  </h4>
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
+                    {categoryMenus.map((menu) => (
+                      <div
+                        key={menu.id}
+                        style={{
+                          backgroundColor: colors.bg,
+                          padding: '12px',
+                          borderRadius: '6px',
+                          border: `1px solid ${colors.border}`,
+                        }}
+                      >
+                        <div
+                          style={{
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            marginBottom: '8px',
+                            gap: '10px',
+                          }}
+                        >
+                          <span style={{ color: colors.text, fontWeight: 'bold', fontSize: '16px' }}>
+                            {menu.name}
+                          </span>
+
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                            <span style={{ color: colors.textDim }}>
+                              {Number(menu.price || 0).toLocaleString()}원
+                            </span>
+
+                            <button
+                              onClick={() => handleDeleteMenu(menu.id)}
+                              style={{
+                                backgroundColor: 'transparent',
+                                color: colors.danger,
+                                border: `1px solid ${colors.danger}`,
+                                padding: '4px 8px',
+                                borderRadius: '4px',
+                                cursor: 'pointer',
+                                fontSize: '12px',
+                              }}
+                            >
+                              삭제
+                            </button>
+                          </div>
+                        </div>
+
+                        {menu.options && (
+                          <div style={{ fontSize: '13px', color: colors.textDim }}>
+                            {menu.options.useHotIce && (
+                              <div>
+                                └ HOT: +{menu.options.hotPrice}원 / ICE: +{menu.options.icePrice}원
+                              </div>
+                            )}
+
+                            {menu.options.useShot && (
+                              <div>
+                                └ 샷 추가: +{menu.options.shotPrice}원
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
